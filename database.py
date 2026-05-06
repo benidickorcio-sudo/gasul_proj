@@ -69,18 +69,20 @@ def initialize_db():
     );
     """,
 
-    # SALES sa created by ay kung sino yung nag process ng sale, pwede admin or cashier username
+    # SALES created by whoever processed the sale (admin or cashier username)
     """
     CREATE TABLE IF NOT EXISTS sales (
-        sales_id       INT           AUTO_INCREMENT PRIMARY KEY,
-        customer_id    INT           DEFAULT NULL,
-        sale_date      DATETIME      DEFAULT CURRENT_TIMESTAMP,
-        total_amount   DECIMAL(10,2) NOT NULL,
-        payment_method VARCHAR(20)   NOT NULL,
-        amount_paid    DECIMAL(10,2) DEFAULT 0.00,
-        change_amount  DECIMAL(10,2) DEFAULT 0.00,
-        status         VARCHAR(30)   DEFAULT 'PAID',
-        created_by     VARCHAR(50)   DEFAULT NULL,
+        sales_id           INT           AUTO_INCREMENT PRIMARY KEY,
+        customer_id        INT           DEFAULT NULL,
+        sale_date          DATETIME      DEFAULT CURRENT_TIMESTAMP,
+        total_amount       DECIMAL(10,2) NOT NULL,
+        payment_method     VARCHAR(20)   NOT NULL,
+        amount_paid        DECIMAL(10,2) DEFAULT 0.00,
+        change_amount      DECIMAL(10,2) DEFAULT 0.00,
+        status             VARCHAR(30)   DEFAULT 'PAID',
+        due_date           DATETIME      DEFAULT NULL,
+        late_charge_applied DECIMAL(10,2) DEFAULT 0.00,
+        created_by         VARCHAR(50)   DEFAULT NULL,
         FOREIGN KEY (customer_id) REFERENCES customers(customer_id) ON UPDATE CASCADE,
         FOREIGN KEY (created_by)  REFERENCES users(username)        ON UPDATE CASCADE 
     );
@@ -315,6 +317,10 @@ END
     for view in views:
         cursor.execute(view)
         
+    # Ensure sales due_date and late_charge_applied columns exist for existing databases
+    cursor.execute("ALTER TABLE sales ADD COLUMN IF NOT EXISTS due_date DATETIME DEFAULT NULL")
+    cursor.execute("ALTER TABLE sales ADD COLUMN IF NOT EXISTS late_charge_applied DECIMAL(10,2) DEFAULT 0.00")
+
     # execute procedures
     for procedure in procedures:
         cursor.execute(procedure)

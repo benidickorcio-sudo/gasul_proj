@@ -8,6 +8,9 @@ from utils.receipt import get_sale_data, generate_receipt, save_receipt
 from utils.auth import get_current_user
 from utils.colors import get_color
 from database import get_connection
+from datetime import datetime, timedelta
+
+CREDIT_DUE_DAYS = 7
 
 
 class POSScreen:
@@ -75,6 +78,9 @@ class POSScreen:
         cart_action_frame = ctk.CTkFrame(cart_frame, fg_color="transparent")
         cart_action_frame.pack(fill="x", padx=5, pady=(0, 8))
 
+        self.decrease_btn = ctk.CTkButton(cart_action_frame, text="Decrease Qty", command=self.decrease_selected_quantity, fg_color=get_color("status_warning"), hover_color=get_color("status_warning_dark"))
+        self.decrease_btn.pack(side="left",padx=8,pady=8)
+
         self.remove_btn = ctk.CTkButton(cart_action_frame, text="Remove Selected", command=self.remove_selected_from_cart, fg_color=get_color("status_error"), hover_color=get_color("status_error_dark"))
         self.remove_btn.pack(side="left",padx=8,pady=8)
 
@@ -130,6 +136,27 @@ class POSScreen:
                 profit = float(p.get("profit", 0.0))
                 price_value = latest_cost + profit if latest_cost > 0 else p.get("total_price", p.get("price", 0.0))
                 self.products_tv.insert("", "end", values=(p["product_id"], p["name"], f"{price_value:.2f}", p["quantity"]))
+        self.refresh_cart_prices()
+
+    def refresh_cart_prices(self):
+        if not self.cart_items:
+            return
+
+        updated = False
+        for item in self.cart_items:
+            product = get_product_by_id(item["product_id"])
+            if not product:
+                continue
+            latest_cost = get_latest_unit_cost(product["product_id"]) or float(product.get("cost_price", 0.0))
+            profit = float(product.get("profit", 0.0))
+            current_price = latest_cost + profit if latest_cost > 0 else product.get("total_price", product.get("price", 0.0))
+            if item["unit_price"] != current_price:
+                item["unit_price"] = current_price
+                item["subtotal"] = item["quantity"] * current_price
+                updated = True
+
+        if updated:
+            self.update_cart_view()
 
     def sort_products(self, col, reverse=False):
         def parse(value):
@@ -195,6 +222,24 @@ class POSScreen:
             self.quantity_entry.delete(0, ctk.END)
             self.status_label.configure(text=f"Added {q} x {product['name']} to cart", text_color=get_color("status_success"))
 
+    def decrease_selected_quantity(self):
+        selected = self.cart_tv.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a cart item to decrease quantity.")
+            return
+        item = self.cart_tv.item(selected[0])["values"]
+        prod_name = item[0]
+        cart_item = next((x for x in self.cart_items if x["name"] == prod_name), None)
+        if cart_item:
+            if cart_item["quantity"] > 1:
+                cart_item["quantity"] -= 1
+                cart_item["subtotal"] = cart_item["quantity"] * cart_item["unit_price"]
+                self.status_label.configure(text=f"Decreased {prod_name} quantity to {cart_item['quantity']}", text_color=get_color("status_success"))
+            else:
+                self.cart_items = [x for x in self.cart_items if x["name"] != prod_name]
+                self.status_label.configure(text=f"Removed {prod_name} from cart", text_color=get_color("status_success"))
+            self.update_cart_view()
+
     def remove_selected_from_cart(self):
         selected = self.cart_tv.selection()
         if not selected:
@@ -213,14 +258,6 @@ class POSScreen:
         self.total_label.configure(text=f"Total: ₱{total:.2f}")
 
     def show_checkout_dialog(self):
-        if not self.cart_items:
-            # Log empty cart attempt
-            current_user = get_current_user()
-            user = current_user.get("username") if current_user else "Unknown"
-            log_transaction(None, user, "FAILED", "Cart is empty: No items to checkout.")
-            self.status_label.configure(text="Cart is empty", text_color=get_color("status_error"))
-            return
-
         if not self.customer_options:
             # Log no customers attempt
             current_user = get_current_user()
@@ -230,7 +267,7 @@ class POSScreen:
             messagebox.showwarning("Warning", "No customers available. Please add a customer first.")
             return
 
-        total = float(sum(item["subtotal"] for item in self.cart_items))
+        total = float(sum(item["subtotal"] for item in self.cart_items)) if self.cart_items else 0.0
 
         checkout_dialog = ctk.CTkToplevel(self.frame)
         checkout_dialog.title("Checkout")
@@ -245,7 +282,7 @@ class POSScreen:
 
         ctk.CTkLabel(checkout_dialog, text="Payment Method", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="w", padx=20, pady=(0, 4))
         payment_method_var = ctk.StringVar(value="CASH")
-        payment_menu = ctk.CTkOptionMenu(checkout_dialog, values=["CASH", "GCASH", "CREDIT", "OTHER"], variable=payment_method_var)
+        payment_menu = ctk.CTkOptionMenu(checkout_dialog, values=["CASH", "GCASH", "CREDIT", "PAY BALANCE", "OTHER"], variable=payment_method_var)
         payment_menu.pack(fill="x", padx=20, pady=(0, 12))
 
         # Frame for custom payment method
@@ -286,8 +323,77 @@ class POSScreen:
                     return
                 payment_method = custom_payment.upper()
             
+            if not self.cart_items and payment_method != "PAY BALANCE":
+                # Log empty cart attempt
+                current_user = get_current_user()
+                user = current_user.get("username") if current_user else "Unknown"
+                log_transaction(None, user, "FAILED", "Cart is empty: No items to checkout.")
+                messagebox.showerror("Cart is empty", "Please add items to cart or select PAY BALANCE.")
+                return
+            
             customer_name = customer_var.get().strip()
             customer_id = self.customer_map.get(customer_name)
+            
+            # Handle PAY BALANCE payment method
+            if payment_method == "PAY BALANCE":
+                if not customer_id:
+                    # Log invalid customer attempt
+                    current_user = get_current_user()
+                    user = current_user.get("username") if current_user else "Unknown"
+                    log_transaction(None, user, "FAILED", "Invalid Customer: Walk-in customers cannot pay balance.")
+                    messagebox.showerror("Invalid Customer", "Please select a registered customer to pay balance.")
+                    return
+                
+                customer_balance = get_customer_balance(customer_id)
+                if customer_balance <= 0:
+                    # Log no balance attempt
+                    current_user = get_current_user()
+                    user = current_user.get("username") if current_user else "Unknown"
+                    log_transaction(None, user, "FAILED", f"No Balance: Customer {customer_name} has no outstanding balance.")
+                    messagebox.showerror("No Balance", f"Customer {customer_name} has no outstanding balance to pay.")
+                    return
+                
+                if not amount_paid_text or not amount_paid_text.replace('.', '', 1).isdigit():
+                    # Log invalid payment attempt
+                    current_user = get_current_user()
+                    user = current_user.get("username") if current_user else "Unknown"
+                    log_transaction(None, user, "FAILED", "Invalid Payment: Enter a valid amount paid.")
+                    messagebox.showerror("Invalid Payment", "Enter a valid amount paid.")
+                    return
+                amount_paid = float(amount_paid_text)
+                
+                if amount_paid > customer_balance:
+                    # Log overpayment attempt
+                    current_user = get_current_user()
+                    user = current_user.get("username") if current_user else "Unknown"
+                    log_transaction(None, user, "FAILED", f"Overpayment: Amount paid (₱{amount_paid:.2f}) exceeds balance (₱{customer_balance:.2f}).")
+                    messagebox.showerror("Overpayment", f"Amount paid (₱{amount_paid:.2f}) cannot exceed the outstanding balance (₱{customer_balance:.2f}).")
+                    return
+                
+                # Confirm payment
+                if not messagebox.askyesno("Confirm Balance Payment", f"Pay ₱{amount_paid:.2f} towards {customer_name}'s balance of ₱{customer_balance:.2f}?"):
+                    return
+                
+                # Update customer balance
+                new_balance = customer_balance - amount_paid
+                update_customer(customer_id, current_balance=new_balance)
+                
+                # Create a balance payment sale
+                try:
+                    sale_id = create_sale(customer_id, [], "BALANCE PAYMENT", amount_paid, amount_paid, amount_paid)
+                except Exception as e:
+                    # Log failed transaction
+                    current_user = get_current_user()
+                    user = current_user.get("username") if current_user else "Unknown"
+                    log_transaction(None, user, "FAILED", str(e))
+                    messagebox.showerror("Transaction Error", f"Error processing balance payment: {str(e)}")
+                    return
+                
+                messagebox.showinfo("Balance Payment", f"Balance payment of ₱{amount_paid:.2f} processed for {customer_name}.\nNew balance: ₱{new_balance:.2f}\nSale ID: {sale_id}")
+                checkout_dialog.destroy()
+                self.status_label.configure(text=f"Balance payment completed: {sale_id}", text_color=get_color("status_success"))
+                return
+            
             amount_paid_text = amount_paid_entry.get().strip()
             amount_paid = 0.0
 
@@ -323,12 +429,15 @@ class POSScreen:
                 
                 # For CREDIT: partial payment only - carry balance to customer account
                 balance_due = total - amount_paid
+                due_date = datetime.now() + timedelta(days=CREDIT_DUE_DAYS)
+                due_date_str = due_date.strftime("%Y-%m-%d")
                 if balance_due > 0:
                     confirm_msg = f"""CREDIT PAYMENT DETAILS
 
 Total Purchase: ₱{total:.2f}
 Amount Paid Now: ₱{amount_paid:.2f}
 Balance Due: ₱{balance_due:.2f}
+Due Date: {due_date_str}
 
 This balance of ₱{balance_due:.2f} will be added to {customer_name}'s credit account.
 
@@ -386,7 +495,7 @@ Do you want to proceed?"""
             actual_received = amount_paid if payment_method != "CREDIT" else None
             
             try:
-                sale_id = create_sale(customer_id, sale_items, payment_method, amount_to_save, total, actual_received)
+                sale_id = create_sale(customer_id, sale_items, payment_method, amount_to_save, total, actual_received, due_date=(due_date if payment_method == "CREDIT" else None))
             except Exception as e:
                 # Log failed transaction from POS
                 current_user = get_current_user()
@@ -401,6 +510,8 @@ Do you want to proceed?"""
                     balance_due = total - amount_paid
                     if balance_due != 0:
                         balance_text = f"Balance Due: ₱{abs(balance_due):.2f}" if balance_due > 0 else f"Extra Payment (Credit): ₱{abs(balance_due):.2f}"
+                        if 'due_date_str' in locals():
+                            balance_text += f"\nDue Date: {due_date_str}"
                         messagebox.showinfo("CREDIT SALE", f"Sale ID: {sale_id}\nTotal: ₱{total:.2f}\nAmount Paid: ₱{amount_paid:.2f}\n{balance_text}")
                     else:
                         messagebox.showinfo("CREDIT SALE", f"Sale ID: {sale_id}\nTotal: ₱{total:.2f}\nFull Payment Received")

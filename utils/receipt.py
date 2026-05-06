@@ -12,7 +12,7 @@ def get_sale_data(sale_id):
         # Get sale info
         cursor.execute(
             """SELECT s.sales_id, s.sale_date, COALESCE(c.name) as customer_name,
-                    s.total_amount, s.amount_paid, s.change_amount, s.payment_method
+                    s.total_amount, s.amount_paid, s.change_amount, s.payment_method, s.due_date
                 FROM sales s
                 LEFT JOIN customers c ON s.customer_id = c.customer_id
                 WHERE s.sales_id = %s""",
@@ -108,8 +108,16 @@ def generate_receipt(sale_data):
     draw.text((10, y), f"Change: P{float(sale_data['change_amount']):.2f}", fill="black", font=font_normal)
     y += 18
     draw.text((10, y), f"Method: {sale_data['payment_method']}", fill="black", font=font_normal)
-    y += 25
-    
+    y += 18
+    if sale_data.get('due_date'):
+        sdue_date = sale_data['due_date']
+        if hasattr(sdue_date, 'strftime'):
+            due_date_str = sdue_date.strftime("%Y-%m-%d")
+        else:
+            due_date_str = str(sdue_date)
+        draw.text((10, y), f"Due Date: {due_date_str}", fill="black", font=font_normal)
+        y += 18
+    y += 7
     # Footer
     draw.text((170, y), "Thank you!", fill="black", font=font_large)
     
@@ -132,7 +140,7 @@ def save_receipt(sale_id):
         return False
 
 
-def get_payment_receipt_data(customer, amount_paid, payment_method="BALANCE PAYMENT", sale_id=None):
+def get_payment_receipt_data(customer, amount_paid, payment_method="BALANCE PAYMENT", sale_id=None, due_date=None):
     return {
         'sales_id': sale_id or f"PAY-{customer.get('customer_id')}-{datetime.now().strftime('%Y%m%d%H%M%S')}",
         'sale_date': datetime.now(),
@@ -141,6 +149,7 @@ def get_payment_receipt_data(customer, amount_paid, payment_method="BALANCE PAYM
         'amount_paid': amount_paid,
         'change_amount': 0.0,
         'payment_method': payment_method,
+        'due_date': due_date,
         'items': []
     }
 

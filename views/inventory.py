@@ -1,19 +1,28 @@
 # stock monitoring & restock management - combined view
 import customtkinter as ctk
+from decimal import Decimal, InvalidOperation
 from models.product import view_products, add_product, update_product, delete_product, get_product_by_id, get_total_inventory_value
 from models.restock import restock_product, get_all_restock, get_total_restock_cost, get_restock_by_id, update_restock, delete_restock, get_latest_unit_cost
 from database import get_connection
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, simpledialog
 from utils.colors import get_color
 
 class InventoryAndRestockScreen():
-    def __init__(self, parent):
+    def __init__(self, parent, on_update=None):
         self.parent = parent
+        self.on_update = on_update
         self.selected_product = None
         self.selected_restock = None
         self.build_ui()
         self.load_inventory()
         self.load_restock_history()
+
+    def _notify_update(self):
+        if callable(self.on_update):
+            try:
+                self.on_update()
+            except Exception as e:
+                print(f"Error refreshing linked views after inventory change: {e}")
 
     def build_ui(self):
         # Title
@@ -322,31 +331,20 @@ class InventoryAndRestockScreen():
     def save_product(self, product_id):
         name = self.name_entry.get().strip()
         try:
-            if product_id is not None:
-                # Editing: get all fields including cost_price and total_price
-                cost_price = float(self.cost_price_entry.get().strip())
-                profit = float(self.profit_entry.get().strip())
-                total_price = float(self.total_price_entry.get().strip() or 0)
-                qty = int(self.qty_entry.get().strip())
-            else:
-                # Adding: set defaults
-                cost_price = 0.0
-                profit = 0.0
-                total_price = 0.0
-                qty = 0
+            cost_price = float(self.cost_price_entry.get().strip())
+            profit = float(self.profit_entry.get().strip())
+            total_price = float(self.total_price_entry.get().strip() or 0)
+            qty = int(self.qty_entry.get().strip())
         except ValueError:
-            if product_id is not None:
-                messagebox.showerror("Error", "Invalid numeric values for cost price, profit, or quantity")
-            else:
-                messagebox.showerror("Error", "Invalid input")
+            messagebox.showerror("Error", "Invalid numeric values")
             return
         if not name:
             messagebox.showerror("Error", "Name is required")
             return
-        if product_id is not None and qty < 0:
+        if qty < 0:
             messagebox.showerror("Error", "Quantity must be non-negative")
             return
-        if product_id is not None and (cost_price < 0 or profit < 0):
+        if cost_price < 0 or profit < 0:
             messagebox.showerror("Error", "Cost price and profit must be non-negative")
             return
 
@@ -363,6 +361,7 @@ class InventoryAndRestockScreen():
             add_product(name, total_price, qty, cost_price=cost_price, profit=profit)
         self.form_window.destroy()
         self.load_inventory()
+        self._notify_update()
 
     def add_restock(self):
         self.restock_form_window = ctk.CTkToplevel(self.parent)
@@ -484,6 +483,7 @@ class InventoryAndRestockScreen():
         self.restock_form_window.destroy()
         self.load_restock_history()
         self.load_inventory()
+        self._notify_update()
 
     def delete_restock(self):
         if not self.selected_restock:
@@ -493,6 +493,7 @@ class InventoryAndRestockScreen():
             delete_restock(self.selected_restock)
             self.load_restock_history()
             self.load_inventory()
+            self._notify_update()
 
 
 class InventoryScreen():
@@ -676,17 +677,18 @@ class InventoryScreen():
         if product_id:
             product = get_product_by_id(product_id)
             if product:
-                cost_price_value = float(product.get('cost_price', 0.0))
+                cost_price_value = Decimal(str(product.get('cost_price', 0.0)))
                 quantity_value = int(product['quantity'])
-                total_price_value = cost_price_value * quantity_value
-                
+                profit_value = Decimal(str(product.get('profit', 0)))
+                total_price_value = Decimal(str(product.get('total_price', cost_price_value * quantity_value)))
+
                 self.name_entry.insert(0, product['name'])
-                self.cost_price_entry.insert(0, str(cost_price_value))
+                self.cost_price_entry.insert(0, f"{cost_price_value:.2f}")
                 self.qty_entry.insert(0, str(quantity_value))
                 self.total_price_entry.configure(state="normal")
                 self.total_price_entry.insert(0, f"{total_price_value:.2f}")
                 self.total_price_entry.configure(state="readonly")
-                self.profit_entry.insert(0, str(product.get('profit', 0)))
+                self.profit_entry.insert(0, f"{profit_value:.2f}")
 
         # Buttons
         btn_frame = ctk.CTkFrame(self.form_window, corner_radius=0)
@@ -716,31 +718,20 @@ class InventoryScreen():
     def save_product(self, product_id):
         name = self.name_entry.get().strip()
         try:
-            if product_id is not None:
-                # Editing: get all fields including cost_price and total_price
-                cost_price = float(self.cost_price_entry.get().strip())
-                profit = float(self.profit_entry.get().strip())
-                total_price = float(self.total_price_entry.get().strip() or 0)
-                qty = int(self.qty_entry.get().strip())
-            else:
-                # Adding: set defaults
-                cost_price = 0.0
-                profit = 0.0
-                total_price = 0.0
-                qty = 0
+            cost_price = float(self.cost_price_entry.get().strip())
+            profit = float(self.profit_entry.get().strip())
+            total_price = float(self.total_price_entry.get().strip() or 0)
+            qty = int(self.qty_entry.get().strip())
         except ValueError:
-            if product_id is not None:
-                messagebox.showerror("Error", "Invalid numeric values for cost price, profit, or quantity")
-            else:
-                messagebox.showerror("Error", "Invalid input")
+            messagebox.showerror("Error", "Invalid numeric values")
             return
         if not name:
             messagebox.showerror("Error", "Name is required")
             return
-        if product_id is not None and qty < 0:
+        if qty < 0:
             messagebox.showerror("Error", "Quantity must be non-negative")
             return
-        if product_id is not None and (cost_price < 0 or profit < 0):
+        if cost_price < 0 or profit < 0:
             messagebox.showerror("Error", "Cost price and profit must be non-negative")
             return
 

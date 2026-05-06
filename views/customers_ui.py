@@ -1,6 +1,7 @@
 import customtkinter as ctk
 from tkinter import ttk, messagebox
 from models.customer import *
+from models.credit import apply_overdue_charges
 from utils.colors import get_color
 from utils.receipt import get_payment_receipt_data, generate_receipt, save_payment_receipt
 
@@ -119,6 +120,16 @@ class CustomersScreen:
             fg_color=get_color("status_error_dark"),
             hover_color="#dc2626"
         )
+        self.delete_permanently_btn.pack(side="left", padx=8)
+
+    def _get_customer_display_values(self, customer):
+        return (
+            customer.get("customer_id"),
+            customer.get("name", "") or "",
+            customer.get("contact_number", "") or "",
+            customer.get("address", "") or "",
+            f"₱{float(customer.get('current_balance', 0.0) or 0.0):.2f}"
+        )
 
     def load_customers(self):
         self.customers_tv.delete(*self.customers_tv.get_children())
@@ -126,11 +137,11 @@ class CustomersScreen:
         if self.viewing_backup:
             rows = get_all_backup_customers() or []
         else:
+            apply_overdue_charges()
             rows = get_all_customers() or []
         
         for c in rows:
-            balance = f"₱{float(c.get('current_balance', 0.0)):.2f}"
-            self.customers_tv.insert("", "end", values=(c.get("customer_id"), c.get("name"), c.get("contact_number"), c.get("address"), balance))
+            self.customers_tv.insert("", "end", values=self._get_customer_display_values(c))
         
         self.edit_btn.configure(state="disabled")
         self.delete_btn.configure(state="disabled")
@@ -152,8 +163,7 @@ class CustomersScreen:
             rows = search_customer(keyword) or []
         
         for c in rows:
-            balance = f"₱{float(c.get('current_balance', 0.0)):.2f}"
-            self.customers_tv.insert("", "end", values=(c.get("customer_id"), c.get("name"), c.get("contact_number"), c.get("address"), balance))
+            self.customers_tv.insert("", "end", values=self._get_customer_display_values(c))
 
     def on_customer_select(self, event=None):
         selected = self.customers_tv.selection()
@@ -183,7 +193,7 @@ class CustomersScreen:
             self.restore_btn.configure(state="disabled")
 
     def open_add_customer(self):
-        self.open_customer_form("Add Customer")
+        self.open_customer_form("Add Customer", customer=None)
 
     def open_edit_customer(self):
         selected = self.customers_tv.selection()
@@ -242,9 +252,9 @@ class CustomersScreen:
         contact_entry.bind("<KeyRelease>", validate_contact)
 
         if customer is not None:
-            name_entry.insert(0, customer.get("name", ""))
-            contact_entry.insert(0, customer.get("contact_number", ""))
-            address_entry.insert(0, customer.get("address", ""))
+            name_entry.insert(0, customer.get("name", "") or "")
+            contact_entry.insert(0, customer.get("contact_number", "") or "")
+            address_entry.insert(0, customer.get("address", "") or "")
 
         def submit_customer():
             name = name_entry.get().strip()
@@ -263,6 +273,9 @@ class CustomersScreen:
             if customer is None:
                 add_customer(name, address, contact)
                 messagebox.showinfo("Customer Added", f"Customer '{name}' has been added.")
+                # Close and refresh
+                self.form_window.destroy()
+                self.load_customers()
             else:
                 update_customer(
                     customer["customer_id"],
@@ -271,9 +284,9 @@ class CustomersScreen:
                     contact_number=contact
                 )
                 messagebox.showinfo("Customer Updated", f"Customer '{name}' has been updated.")
-            
-            self.form_window.destroy()
-            self.load_customers()
+                # Close and refresh
+                self.form_window.destroy()
+                self.load_customers()
 
         save_text = "Add" if customer is None else "Update"
         submit_btn = ctk.CTkButton(self.form_window, text=save_text, fg_color="#16a34a", hover_color="#15803d", command=submit_customer)
